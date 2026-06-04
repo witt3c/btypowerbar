@@ -237,25 +237,74 @@
     function handlePhotoUpload(input) {
         if (!input.files || !input.files[0]) return;
         
-        showLoading('圖片高度解析上傳 Google Drive 中...');
+        showLoading('正在將影像進行高效率壓縮與優化...');
+        const file = input.files[0];
         const reader = new FileReader();
         
-        reader.onload = async function(e) {
-            try {
-                const base64Str = e.target.result;
-                const res = await fetch(GAS_URL, {
-                    method: 'POST',
-                    body: JSON.stringify({ action: "submitRepairData", orderId: activeOrder.orderId, photoBase64: base64Str })
-                });
-                if((await res.json()).status === "success") {
-                    alert("📸 照片成功儲存至雲端，並完成資料表對齊！");
-                    await loadDashboard();
-                    openDetails(activeOrder.orderId);
+        reader.onload = function(e) {
+            const img = new Image();
+            img.src = e.target.result;
+            
+            img.onload = function() {
+                // --- 前端畫布壓縮邏輯核心 ---
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                
+                // 設定照片最大寬度/高度為 1024 像素（維修檢查極度夠用，且檔案極小）
+                let width = img.width;
+                let height = img.height;
+                const max_size = 1024;
+                
+                if (width > height) {
+                    if (width > max_size) {
+                        height *= max_size / width;
+                        width = max_size;
+                    }
+                } else {
+                    if (height > max_size) {
+                        width *= max_size / height;
+                        height = max_size;
+                    }
                 }
-            } catch(err) { alert("影像傳輸失敗: " + err); }
-            finally { hideLoading(); }
-        }
-        reader.readAsDataURL(input.files[0]);
+                
+                canvas.width = width;
+                canvas.height = height;
+                
+                // 將原圖畫進新畫布中
+                ctx.drawImage(img, 0, 0, width, height);
+                
+                // 關鍵：壓縮品質設為 0.6 (60% 畫質)，檔案大小能暴縮 95%，但外觀依舊清晰
+                const compressedBase64 = canvas.toDataURL('image/jpeg', 0.6);
+                
+                // --- 開始傳送壓縮後的小檔案給 Google ---
+                showLoading('影像體積優化成功！正同步至 Google 雲端硬碟...');
+                
+                fetch(GAS_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({ 
+                        action: "submitRepairData", 
+                        orderId: activeOrder.orderId, 
+                        photoBase64: compressedBase64 
+                    })
+                })
+                .then(res => res.json())
+                .then(result => {
+                    if(result.status === "success") {
+                        alert("🎉 📸 照片成功儲存至雲端，並完成資料表對齊！");
+                        loadDashboard().then(() => openDetails(activeOrder.orderId));
+                    } else {
+                        alert("後端儲存出錯: " + result.message);
+                    }
+                })
+                .catch(err => {
+                    alert("影像傳輸超時，請檢查網路連線或稍後再試。");
+                })
+                .finally(() => { 
+                    hideLoading(); 
+                });
+            };
+        };
+        reader.readAsDataURL(file);
     }
 
     // 儲存備註
