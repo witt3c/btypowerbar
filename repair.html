@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>維修人員工作台</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    <style>
+        :root { --primary-color: #10b981; --bg-color: #f4f6f9; --text-dark: #1f2937; }
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: var(--bg-color); color: var(--text-dark); padding: 15px 10px; }
+        .main-card { background: #ffffff; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); padding: 25px 20px; margin-bottom: 20px; }
+        .order-block { border-left: 5px solid #d1d5db; background-color: #f9fafb; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+        .order-block.active { border-left-color: #3b82f6; background-color: #eff6ff; }
+        .form-control, .form-select { border: 2px solid #e5e7eb; border-radius: 12px; padding: 12px; font-size: 1rem; }
+        .btn-custom { border-radius: 12px; padding: 12px; font-weight: 700; transition: all 0.2s; }
+        .preview-img { width: 100%; max-height: 200px; object-fit: cover; border-radius: 12px; display: none; margin-top: 10px; border: 2px dashed #d1d5db; }
+    </style>
+</head>
+<body>
+
+<div class="container" style="max-width: 500px;">
+    <div class="main-card text-center py-3">
+        <h4 class="fw-bold m-0">👨‍🔧 維修人員工作台</h4>
+        <p class="text-muted small m-0 mt-1">目前登入：<span id="workerName" class="fw-bold text-success">載入中...</span></p>
+    </div>
+
+    <div id="listStage">
+        <h5 class="fw-bold mb-3">📋 待處理工單列表</h5>
+        <div id="orderContainer">
+            <p class="text-center text-muted py-4">正在從雲端同步工單清單...</p>
+        </div>
+    </div>
+
+    <div id="actionStage" style="display: none;">
+        <button class="btn btn-sm btn-secondary mb-3" onclick="backToList()">⬅ 返回列表</button>
+        
+        <div class="main-card">
+            <h3 class="fw-bold text-primary mb-3" id="targetOrderId">RP-XXXXXXXX</h3>
+            
+            <div class="p-3 bg-light rounded-3 mb-4 fs-6">
+                <strong>📦 產品：</strong> <span id="targetProdName"></span><br>
+                <strong>🔢 序號：</strong> <span id="targetProdSn"></span><br>
+                <strong>⚠️ 故障原因：</strong> <span id="targetFault" class="text-danger"></span><br>
+                <strong>👤 客戶地址：</strong> <span id="targetAddress"></span>
+            </div>
+
+            <div id="stepAccept">
+                <button class="btn btn-primary w-100 btn-custom fs-5 shadow" onclick="acceptOrder()">⚡ 點擊確認 開始維修</button>
+            </div>
+
+            <div id="stepWorking" style="display: none;">
+                <div class="mb-4">
+                    <label class="form-label fw-bold">📸 產品外觀及狀況拍照</label>
+                    <input type="file" id="cameraInput" accept="image/*" capture="camera" class="form-control" onchange="previewPhoto(this)">
+                    <img id="photoPreview" class="preview-img">
+                    <button id="uploadPhotoBtn" class="btn btn-outline-primary btn-sm w-100 mt-2" style="display:none;" onclick="uploadInitialPhoto()">確認上傳外觀照片</button>
+                </div>
+
+                <hr>
+
+                <div class="mb-4">
+                    <label class="form-label fw-bold">📝 新增維修過程註記</label>
+                    <textarea id="repairNotes" class="form-control" rows="2" placeholder="輸入目前維修進度、更換了什麼零件..."></textarea>
+                    <button class="btn btn-outline-secondary btn-sm w-100 mt-2" onclick="submitNotesOnly()">僅儲存維修備註</button>
+                </div>
+
+                <hr>
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold" style="color: #d9534f;">🏁 完修結案登記</label>
+                    <textarea id="finalResult" class="form-control" rows="2" placeholder="請填寫：最終更換零件清單 / 或無法維修之確切原因" required></textarea>
+                </div>
+                <button class="btn btn-success w-100 btn-custom fs-5 shadow" onclick="closeOrderFinal()">儲存並關閉工單</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const LIFF_ID = "請替換成你的維修員專用_LIFF_ID"; 
+    const GAS_URL = "請替換成你的_GAS_WEB_APP_URL"; 
+    
+    let currentOrders = [];
+    let activeOrder = null;
+    let base64ImageString = null;
+
+    async function initLiff() {
+        try {
+            await liff.init({ liffId: LIFF_ID });
+            if (!liff.isLoggedIn()) { liff.login(); }
+            else {
+                const profile = await liff.getProfile();
+                document.getElementById('workerName').innerText = profile.displayName;
+                fetchOrders();
+            }
+        } catch (error) { alert('LINE 驗證失敗: ' + error); }
+    }
+
+    // 從後端抓取「待維修」和「維修中」的單
+    async function fetchOrders() {
+        try {
+            const res = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ action: "getPendingOrders" }) });
+            const data = await res.json();
+            currentOrders = data.orders;
+            renderOrders();
+        } catch (e) { alert('抓取工單失敗: ' + e); }
+    }
+
+    function renderOrders() {
+        const container = document.getElementById('orderContainer');
+        if (currentOrders.length === 0) {
+            container.innerHTML = '<p class="text-center text-muted py-4">🎉 目前沒有待處理的維修工單！</p>';
+            return;
+        }
+        container.innerHTML = '';
+        currentOrders.forEach(o => {
+            const isActive = o.status === "維修中";
+            const html = `
+                <div class="order-block ${isActive ? 'active' : ''}" onclick="openOrderDetails('${o.orderId}')">
+                    <div class="d-flex justify-content-between fw-bold">
+                        <span>🆔 ${o.orderId}</span>
+                        <span class="badge ${isActive ? 'bg-primary' : 'bg-warning'}">${o.status}</span>
+                    </div>
+                    <div class="small mt-2 text-secondary">
+                        📦 產品: ${o.productName} <br>
+                        ⚠️ 故障: ${o.faultDescription} <br>
+                        ${isActive ? `👨‍🔧 維修員: ${o.worker}` : ''}
+                    </div>
+                </div>`;
+            container.innerHTML += html;
+        });
+    }
+
+    function openOrderDetails(orderId) {
+        activeOrder = currentOrders.find(o => o.orderId === orderId);
+        document.getElementById('targetOrderId').innerText = activeOrder.orderId;
+        document.getElementById('targetProdName').innerText = activeOrder.productName;
+        document.getElementById('targetProdSn').innerText = activeOrder.productSn;
+        document.getElementById('targetFault').innerText = activeOrder.faultDescription;
+        document.getElementById('targetAddress').innerText = activeOrder.customerAddress;
+
+        if (activeOrder.status === "維修中") {
+            document.getElementById('stepAccept').style.display = 'none';
+            document.getElementById('stepWorking').style.display = 'block';
+        } else {
+            document.getElementById('stepAccept').style.display = 'block';
+            document.getElementById('stepWorking').style.display = 'none';
+        }
+        document.getElementById('listStage').style.display = 'none';
+        document.getElementById('actionStage').style.display = 'block';
+    }
+
+    function backToList() {
+        document.getElementById('listStage').style.display = 'block';
+        document.getElementById('actionStage').style.display = 'none';
+        fetchOrders();
+    }
+
+    // 點擊「確認接單」
+    async function acceptOrder() {
+        const worker = document.getElementById('workerName').innerText;
+        const res = await fetch(GAS_URL, {
+            method: 'POST',
+            body: JSON.stringify({ action: "startRepair", rowIndex: activeOrder.rowIndex, worker: worker })
+        });
+        const result = await res.json();
+        if(result.status === "success") {
+            alert('成功接單！工單已鎖定為您的任務。');
+            activeOrder.status = "維修中";
+            activeOrder.worker = worker;
+            openOrderDetails(activeOrder.orderId);
+        }
+    }
+
+    // 手機相機拍照預覽，並壓縮轉成 Base64 字串
+    function previewPhoto(input) {
+        if (input.files && input.files[0]) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = document.getElementById('photoPreview');
+                img.src = e.target.result;
+                img.style.display = 'block';
+                base64ImageString = e.target.result; // 這就是照片的程式碼
+                document.getElementById('uploadPhotoBtn').style.display = 'block';
+            }
+            reader.readAsDataURL(input.files[0]);
+        }
+    }
+
+    // 上傳外觀照片
+    async function uploadInitialPhoto() {
+        if(!base64ImageString) return;
+        document.getElementById('uploadPhotoBtn').disabled = true;
+        document.getElementById('uploadPhotoBtn').innerText = '照片同步上傳雲端硬碟中...';
+        
+        const res = await fetch(GAS_URL, {
+            method: 'POST',
+            body: JSON.stringify({
+                action: "submitRepairData",
+                rowIndex: activeOrder.rowIndex,
+                orderId: activeOrder.orderId,
+                photoBase64: base64ImageString,
+                photoType: "initial"
+            })
+        });
+        const result = await res.json();
+        if(result.status === "success") {
+            alert('📸 外觀檢查照上傳並建檔成功！');
+            document.getElementById('uploadPhotoBtn').style.display = 'none';
+            base64ImageString = null;
+        }
+    }
+
+    // 僅儲存中途備註
+    async function submitNotesOnly() {
+        const notes = document.getElementById('repairNotes').value;
+        if(!notes) { alert('請先輸入備註內容'); return; }
+        const res = await fetch(GAS_URL, {
+            method: 'POST',
+            body: JSON.stringify({ action: "submitRepairData", rowIndex: activeOrder.rowIndex, repairNotes: notes })
+        });
+        const result = await res.json();
+        if(result.status === "success") {
+            alert('備註已成功追加至雲端紀錄！');
+            document.getElementById('repairNotes').value = '';
+        }
+    }
+
+    // 完修結案
+    async function closeOrderFinal() {
+        const finalRes = document.getElementById('finalResult').value;
+        if(!finalRes) { alert('完修結案必須填寫「更換零件或無法維修原因」！'); return; }
+        
+        if(!confirm("確定要結案並關閉這張工單嗎？結案後資料將直接儲存存檔。")) return;
+
+        const res = await fetch(GAS_URL, {
+            method: 'POST',
+            body: JSON.stringify({
+                action: "submitRepairData",
+                rowIndex: activeOrder.rowIndex,
+                isFinalClose: true,
+                finalResult: finalRes
+            })
+        });
+        const result = await res.json();
+        if(result.status === "success") {
+            alert('🏁 工單已順利完修結案！雲端資料庫已安全存檔。');
+            liff.closeWindow();
+        }
+    }
+
+    initLiff();
+</script>
+
+</body>
+</html>
