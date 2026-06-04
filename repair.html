@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>維修人員工作台 - 進階分流版</title>
+    <title>維修人員工作台</title>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
@@ -12,7 +12,6 @@
         body { font-family: 'Noto Sans TC', sans-serif; background-color: var(--bg-color); color: var(--text-dark); padding: 15px 10px; }
         .main-card { background: #ffffff; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); padding: 25px 20px; margin-bottom: 20px; }
         
-        /* 狀態卡片特殊設計 */
         .order-block { border-left: 5px solid #d1d5db; background-color: #f9fafb; padding: 15px; border-radius: 12px; margin-bottom: 12px; cursor: pointer; transition: transform 0.2s; }
         .order-block:active { transform: scale(0.98); }
         .order-block.status-working { border-left-color: #3b82f6; background-color: #eff6ff; }
@@ -20,13 +19,28 @@
         .order-block.status-closed { border-left-color: #10b981; background-color: #f0fdf4; }
         .order-block.status-shipped { border-left-color: #6b7280; background-color: #f3f4f6; opacity: 0.8; }
         
-        .section-title { font-weight: 700; margin: 25px 0 12px 5px; font-size: 1.1rem; display: flex; align-items: center; }
+        .section-title { font-weight: 700; margin: 25px 0 12px 5px; font-size: 1.1rem; }
         .form-control, .form-select { border: 2px solid #e5e7eb; border-radius: 12px; padding: 12px; font-size: 1rem; }
         .btn-custom { border-radius: 12px; padding: 12px; font-weight: 700; }
         .preview-img { width: 100%; max-height: 250px; object-fit: contain; border-radius: 12px; background: #e5e7eb; margin-top: 10px; }
+
+        /* 全域滿版高質感載入動畫動畫遮罩 */
+        .loading-mask {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 255, 255, 0.85); backdrop-filter: blur(4px);
+            z-index: 9999; display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+        }
+        .spinner-custom { color: var(--primary-color); width: 3.5rem; height: 3.5rem; border-width: 0.25em; }
     </style>
 </head>
 <body>
+
+<div id="globalLoading" class="loading-mask">
+    <div class="spinner-border spinner-custom" role="status"></div>
+    <h5 class="mt-3 fw-bold text-dark" id="loadingMessage">正在同步雲端資料...</h5>
+    <p class="text-muted small">請勿關閉網頁</p>
+</div>
 
 <div class="container" style="max-width: 500px;">
     <div class="main-card text-center py-3">
@@ -81,11 +95,8 @@
 
             <div id="uiWorking" style="display: none;">
                 <div class="mb-4">
-                    <label class="form-label fw-bold">📸 1. 上傳外觀與初步檢查照片</label>
-                    <input type="file" id="cameraInput" accept="image/*" capture="camera" class="form-control" onchange="handlePhotoUpload(this)">
-                    <div id="uploadSpinner" class="text-center my-2" style="display:none;">
-                        <div class="spinner-border text-primary spinner-border-sm" role="status"></div> <span class="text-muted small">照片正在上傳至 Google Drive...</span>
-                    </div>
+                    <label class="form-label fw-bold">📸 1. 上傳外觀與狀況照片 (可相機/相簿)</label>
+                    <input type="file" id="cameraInput" accept="image/*" class="form-control" onchange="handlePhotoUpload(this)">
                 </div>
                 <div class="mb-4">
                     <label class="form-label fw-bold">📝 2. 追加維修過程紀錄</label>
@@ -101,7 +112,7 @@
             </div>
 
             <div id="uiShipped" style="display: none;">
-                <div class="alert alert-success text-center fw-bold">本設備已維修完成，等待倉管/維修寄回客戶。</div>
+                <div class="alert alert-success text-center fw-bold mb-3">本設備已維修完成，等待打包物流。</div>
                 <button class="btn btn-warning w-100 btn-custom fs-5 shadow text-dark fw-bold" onclick="shipOrderOut()">🚚 產品已打包寄回客戶（封存工單）</button>
             </div>
         </div>
@@ -115,6 +126,15 @@
     let allOrders = [];
     let activeOrder = null;
 
+    // 控制全域載入動畫的開關
+    function showLoading(msg) {
+        document.getElementById('loadingMessage').innerText = msg;
+        document.getElementById('globalLoading').style.display = 'flex';
+    }
+    function hideLoading() {
+        document.getElementById('globalLoading').style.display = 'none';
+    }
+
     async function initLiff() {
         try {
             await liff.init({ liffId: LIFF_ID });
@@ -124,16 +144,18 @@
                 document.getElementById('workerName').innerText = profile.displayName;
                 loadDashboard();
             }
-        } catch (e) { alert('LINE 身分驗證失敗: ' + e); }
+        } catch (e) { alert('LINE 身分驗證失敗: ' + e); hideLoading(); }
     }
 
     async function loadDashboard() {
+        showLoading('正在讀取雲端工單快訊...');
         try {
             const res = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ action: "getAllOrders" }) });
             const data = await res.json();
             allOrders = data.orders;
             renderDashboard();
         } catch (e) { alert('同步雲端資料庫失敗: ' + e); }
+        finally { hideLoading(); }
     }
 
     function renderDashboard() {
@@ -141,7 +163,6 @@
         const closedList = allOrders.filter(o => o.status === "已結案未寄回");
         const shippedList = allOrders.filter(o => o.status === "已寄回");
 
-        // 渲染進行中
         const container1 = document.getElementById('workingContainer');
         if(workingList.length === 0) {
             container1.innerHTML = '<p class="text-center text-muted py-3 bg-white rounded-3 border">🎉 目前沒有待處理的維修工單！</p>';
@@ -153,11 +174,9 @@
                 </div>`).join('');
         }
 
-        // 渲染已結案未寄回
         document.getElementById('closedContainer').innerHTML = closedList.length === 0 ? '<p class="text-center text-muted small py-2">暫無完修待寄回物資</p>' : 
-            closedList.map(o => `<div class="order-block status-closed" onclick="openDetails('${o.orderId}')"><div class="fw-bold">🆔 ${o.orderId}</div><div class="small text-secondary mt-1">📦 ${o.productName} (維修員: ${o.worker})</div></div>`).join('');
+            closedList.map(o => `<div class="order-block status-closed" onclick="openDetails('${o.orderId}')"><div class="fw-bold">🆔 ${o.orderId}</div><div class="small text-secondary mt-1">📦 ${o.productName}</div></div>`).join('');
 
-        // 渲染已寄回歷史
         document.getElementById('shippedContainer').innerHTML = shippedList.length === 0 ? '<p class="text-center text-muted small py-2">暫無歷史封存紀錄</p>' : 
             shippedList.map(o => `<div class="order-block status-shipped" onclick="openDetails('${o.orderId}')"><div class="fw-bold">🆔 ${o.orderId} (已寄回)</div></div>`).join('');
     }
@@ -170,24 +189,21 @@
         document.getElementById('targetFault').innerText = activeOrder.faultDescription;
         document.getElementById('targetAddress').innerText = activeOrder.customerAddress;
         
-        // 狀態標籤顏色切換
         const badge = document.getElementById('targetStatusBadge');
         badge.innerText = activeOrder.status;
         badge.className = "badge fs-6 px-3 py-2 rounded-pill " + (activeOrder.status==='維修中'?'bg-primary': activeOrder.status==='待維修'?'bg-warning': activeOrder.status==='已結案未寄回'?'bg-success':'bg-secondary');
 
-        // 控制操作面板顯隱
         document.getElementById('uiAccept').style.display = activeOrder.status === '待維修' ? 'block' : 'none';
         document.getElementById('uiWorking').style.display = activeOrder.status === '維修中' ? 'block' : 'none';
         document.getElementById('uiShipped').style.display = activeOrder.status === '已結案未寄回' ? 'block' : 'none';
 
-        // 復盤功能：只要不是新單，就秀出歷史存檔
         if(activeOrder.status !== '待維修') {
             document.getElementById('reviewWorkerBlock').style.display = 'block';
             document.getElementById('targetWorker').innerText = activeOrder.worker;
             document.getElementById('reviewHistoryBlock').style.display = 'block';
             document.getElementById('historyNotes').innerText = activeOrder.repairNotes || "無備註歷程";
             document.getElementById('historyFinalResult').innerText = activeOrder.finalResult || "尚未填寫最終結果";
-            document.getElementById('historyPhotoDiv').innerHTML = activeOrder.photoUrl ? `<strong>📸 維修存檔照：</strong><br><img src="${activeOrder.photoUrl}" class="preview-img d-block">` : "<strong>📸 維修存檔照：</strong> 倉管或維修未拍照";
+            document.getElementById('historyPhotoDiv').innerHTML = activeOrder.photoUrl ? `<strong>📸 維修存檔照：</strong><br><img src="${activeOrder.photoUrl}" class="preview-img d-block">` : "<strong>📸 維修存檔照：</strong> 未拍照存檔";
         } else {
             document.getElementById('reviewWorkerBlock').style.display = 'none';
             document.getElementById('reviewHistoryBlock').style.display = 'none';
@@ -200,24 +216,28 @@
     function backToList() {
         document.getElementById('listStage').style.display = 'block';
         document.getElementById('actionStage').style.display = 'none';
+        document.getElementById('cameraInput').value = ""; // 清空檔案選擇欄
         loadDashboard();
     }
 
     // 接單
     async function acceptOrder() {
+        showLoading('正在為您鎖定工單並開啟權限...');
         const worker = document.getElementById('workerName').innerText;
-        const res = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ action: "startRepair", orderId: activeOrder.orderId, worker: worker }) });
-        if((await res.json()).status === "success") {
-            alert('接單成功！進入維修階段。');
-            loadDashboard().then(() => openDetails(activeOrder.orderId));
-        }
+        try {
+            const res = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ action: "startRepair", orderId: activeOrder.orderId, worker: worker }) });
+            if((await res.json()).status === "success") {
+                await loadDashboard();
+                openDetails(activeOrder.orderId);
+            }
+        } catch(e) { alert('接單失敗: ' + e); hideLoading(); }
     }
 
-    // 修復版：處理拍照並即時上傳至 Google Drive
+    // 處理相簿或相機照片並極速壓縮上傳
     function handlePhotoUpload(input) {
         if (!input.files || !input.files[0]) return;
         
-        document.getElementById('uploadSpinner').style.display = 'block';
+        showLoading('圖片高度解析上傳 Google Drive 中...');
         const reader = new FileReader();
         
         reader.onload = async function(e) {
@@ -228,48 +248,60 @@
                     body: JSON.stringify({ action: "submitRepairData", orderId: activeOrder.orderId, photoBase64: base64Str })
                 });
                 if((await res.json()).status === "success") {
-                    alert("📸 照片成功儲存至 Google 雲端硬碟，並完成網址回填！");
-                    loadDashboard().then(() => openDetails(activeOrder.orderId));
+                    alert("📸 照片成功儲存至雲端，並完成資料表對齊！");
+                    await loadDashboard();
+                    openDetails(activeOrder.orderId);
                 }
-            } catch(err) { alert("上傳失敗: " + err); }
-            finally { document.getElementById('uploadSpinner').style.display = 'none'; }
+            } catch(err) { alert("影像傳輸失敗: " + err); }
+            finally { hideLoading(); }
         }
         reader.readAsDataURL(input.files[0]);
     }
 
-    // 儲存中途備註
+    // 儲存備註
     async function submitNotesOnly() {
         const notes = document.getElementById('repairNotes').value;
         if(!notes) return;
-        const res = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ action: "submitRepairData", orderId: activeOrder.orderId, repairNotes: notes }) });
-        if((await res.json()).status === "success") {
-            alert('中途備註已成功同步至雲端！');
-            document.getElementById('repairNotes').value = '';
-            loadDashboard().then(() => openDetails(activeOrder.orderId));
-        }
+        showLoading('備註正寫入雲端硬碟...');
+        try {
+            const res = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ action: "submitRepairData", orderId: activeOrder.orderId, repairNotes: notes }) });
+            if((await res.json()).status === "success") {
+                document.getElementById('repairNotes').value = '';
+                await loadDashboard();
+                openDetails(activeOrder.orderId);
+            }
+        } catch(e) { alert('寫入失敗: ' + e); }
+        finally { hideLoading(); }
     }
 
     // 完修結案
     async function closeOrderFinal() {
         const finalRes = document.getElementById('finalResult').value;
-        if(!finalRes) { alert('請輸入完修零件明細或原因！'); return; }
-        const res = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ action: "submitRepairData", orderId: activeOrder.orderId, nextStatus: "壓結案未寄回", finalResult: finalRes }) });
-        // 修正上方位元防呆字
-        const resFix = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ action: "submitRepairData", orderId: activeOrder.orderId, nextStatus: "已結案未寄回", finalResult: finalRes }) });
-        if((await resFix.json()).status === "success") {
-            alert('🏁 完修結案成功！工單已移往「完修待寄回」專區。');
-            backToList();
-        }
+        if(!finalRes) { alert('請填寫完修零件明細！'); return; }
+        
+        showLoading('正在進行完修確效存檔...');
+        try {
+            const res = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ action: "submitRepairData", orderId: activeOrder.orderId, nextStatus: "已結案未寄回", finalResult: finalRes }) });
+            if((await res.json()).status === "success") {
+                alert('🏁 完修封存成功！已移至待寄回物資區。');
+                backToList();
+            }
+        } catch(e) { alert('結案失敗: ' + e); }
+        finally { hideLoading(); }
     }
 
-    // 🚚 商品寄回
+    // 物品交寄
     async function shipOrderOut() {
-        if(!confirm("確認此設備已交由物流寄回給客戶？此動作將永久封存工單。")) return;
-        const res = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ action: "submitRepairData", orderId: activeOrder.orderId, nextStatus: "已寄回" }) });
-        if((await res.json()).status === "success") {
-            alert('🚚 工單已完成最終交寄封存！');
-            backToList();
-        }
+        if(!confirm("確認已打包交寄物流？此動作將封存工單。")) return;
+        showLoading('正在處理交寄出庫封存...');
+        try {
+            const res = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ action: "submitRepairData", orderId: activeOrder.orderId, nextStatus: "已寄回" }) });
+            if((await res.json()).status === "success") {
+                alert('🚚 物流出庫成功！工單已歸檔。');
+                backToList();
+            }
+        } catch(e) { alert('交寄失敗: ' + e); }
+        finally { hideLoading(); }
     }
 
     initLiff();
